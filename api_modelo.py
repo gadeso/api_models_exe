@@ -40,7 +40,7 @@ app.add_middleware(
 
 
 # Load the model
-model_path = '../models/modelo_seleccion.pkl'
+model_path = 'final_model.pkl'
 if os.path.exists(model_path):
     with open(model_path, 'rb') as f:
         model = joblib.load(f)
