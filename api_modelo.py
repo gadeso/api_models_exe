@@ -1,13 +1,12 @@
-from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
 import pymysql
 import pandas as pd
-from typing import Optional
 import joblib
 from sklearn.ensemble import RandomForestClassifier
-
+import git
 
 # Cargar variables de entorno desde el archivo .env
 load_dotenv()
@@ -38,9 +37,8 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
-
 # Load the model
-model_path = 'final_model.pkl'
+model_path = 'models/final_model.pkl'
 if os.path.exists(model_path):
     with open(model_path, 'rb') as f:
         model = joblib.load(f)
@@ -93,7 +91,6 @@ def predict(id_candidatura: int):
     finally:
         connection.close()
 
-
 @app.post("/retrain")
 def retrain():
     connection = get_db_connection()
@@ -145,6 +142,18 @@ def retrain():
             # Guardar el nuevo modelo
             joblib.dump(new_model, model_path)
 
-            return {"detail": "Modelo reentrenado con éxito"}
+            # Commit and push the new model to the Git repository
+            repo = git.Repo('.')
+            repo.index.add([model_path])
+            repo.index.commit("Update model after retraining")
+            origin = repo.remote(name='origin')
+            origin.push()
+
+            return {"detail": "Modelo reentrenado con éxito y subido al repositorio"}
     finally:
         connection.close()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
