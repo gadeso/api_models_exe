@@ -10,6 +10,7 @@ load_dotenv()
 
 app = FastAPI()
 
+# Configuración de la base de datos
 username = os.getenv('DB_USER')
 password = os.getenv('DB_PASSWORD')
 host = os.getenv('DB_HOST')
@@ -24,9 +25,8 @@ config = {
     'cursorclass': pymysql.cursors.DictCursor
 }
 
-
 # Cargar el modelo
-model_path = 'models/final_model.pkl'
+model_path = 'models/model_web.pkl'  # Actualiza el nombre del archivo del modelo
 with open(model_path, 'rb') as f:
     model = joblib.load(f)
 
@@ -35,39 +35,55 @@ async def predict(id_candidatura: int):
     # Conectar a la base de datos
     db = pymysql.connect(**config)
     cursor = db.cursor()
-
+    
     try:
-        # Obtener los datos del candidato
+        # Obtener las notas de competencias de la candidatura
         cursor.execute("""
-            SELECT c.edad, c.nota_media, c.nivel_ingles, 
-                   IFNULL((SELECT nota FROM competencias WHERE id_candidatura = %s AND nombre_competencia = 'Profesionalidad'), 0) AS Profesionalidad,
-                   IFNULL((SELECT nota FROM competencias WHERE id_candidatura = %s AND nombre_competencia = 'Dominio'), 0) AS Dominio,
-                   IFNULL((SELECT nota FROM competencias WHERE id_candidatura = %s AND nombre_competencia = 'Resiliencia'), 0) AS Resiliencia,
-                   IFNULL((SELECT nota FROM competencias WHERE id_candidatura = %s AND nombre_competencia = 'HabilidadesSociales'), 0) AS HabilidadesSociales,
-                   IFNULL((SELECT nota FROM competencias WHERE id_candidatura = %s AND nombre_competencia = 'Liderazgo'), 0) AS Liderazgo,
-                   IFNULL((SELECT nota FROM competencias WHERE id_candidatura = %s AND nombre_competencia = 'Colaboracion'), 0) AS Colaboracion,
-                   IFNULL((SELECT nota FROM competencias WHERE id_candidatura = %s AND nombre_competencia = 'Compromiso'), 0) AS Compromiso,
-                   IFNULL((SELECT nota FROM competencias WHERE id_candidatura = %s AND nombre_competencia = 'Iniciativa'), 0) AS Iniciativa
-            FROM candidatos c
-            INNER JOIN candidaturas cand ON c.id_candidato = cand.id_candidato
-            WHERE cand.id_candidatura = %s
-        """, (id_candidatura, id_candidatura, id_candidatura, id_candidatura, id_candidatura, id_candidatura, id_candidatura, id_candidatura, id_candidatura))
+            SELECT nombre_competencia, nota
+            FROM competencias
+            WHERE id_candidatura = %s
+        """, (id_candidatura,))
         
-        candidato_data = cursor.fetchone()
-        
-        if not candidato_data:
-            raise HTTPException(status_code=404, detail="No se encontraron datos para la candidatura proporcionada.")
-        
-        # Crear un DataFrame con las características del candidato y las competencias en el orden correcto
-        input_data = pd.DataFrame([candidato_data], columns=[
-            'edad', 'nota_media', 'nivel_ingles', 'Profesionalidad', 'Dominio', 'Resiliencia', 'HabilidadesSociales', 'Liderazgo', 'Colaboracion', 'Compromiso', 'Iniciativa'
+        competencias = cursor.fetchall()
+
+        if not competencias:
+            raise HTTPException(status_code=404, detail="No se encontraron competencias para la candidatura proporcionada.")
+
+        # Crear un diccionario para las competencias
+        competencias_dict = {comp['nombre_competencia']: comp['nota'] for comp in competencias}
+
+        # Verificar que todas las competencias necesarias están presentes
+        required_competencies = ['Profesionalidad', 'Dominio', 'Resiliencia', 'HabilidadesSociales', 'Liderazgo', 'Colaboracion', 'Compromiso', 'Iniciativa']
+        for comp in required_competencies:
+            if comp not in competencias_dict:
+                competencias_dict[comp] = 0  # Asignar 0 si la competencia no está presente
+
+        # Crear un DataFrame con las competencias en el orden correcto
+        input_data = pd.DataFrame([[
+            competencias_dict['Profesionalidad'],
+            competencias_dict['Dominio'],
+            competencias_dict['Resiliencia'],
+            competencias_dict['HabilidadesSociales'],
+            competencias_dict['Liderazgo'],
+            competencias_dict['Colaboracion'],
+            competencias_dict['Compromiso'],
+            competencias_dict['Iniciativa']
+        ]], columns=[
+            'Profesionalidad', 'Dominio', 'Resiliencia', 'HabilidadesSociales', 'Liderazgo', 'Colaboracion', 'Compromiso', 'Iniciativa'
         ])
 
         # Realizar la predicción
         prediction = model.predict(input_data)
         result = 'Admitido' if prediction == 1 else 'Rechazado'
 
-        return {"id_candidatura": id_candidatura, "prediction": result}
+        return {"prediction": result}
+
     finally:
         cursor.close()
         db.close()
+
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("api_modelo:app", host="0.0.0.0", port=8000)
