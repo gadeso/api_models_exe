@@ -10,15 +10,20 @@ load_dotenv()
 
 app = FastAPI()
 
-# Configuración de la base de datos usando las variables de entorno
+username = os.getenv('DB_USER')
+password = os.getenv('DB_PASSWORD')
+host = os.getenv('DB_HOST')
+database = os.getenv('DB_DATABASE')
+
 config = {
-    'user': os.getenv('DATABASE_USER'),
-    'password': os.getenv('DATABASE_PASSWORD'),
-    'host': os.getenv('DATABASE_HOST'),
+    'user': username,
+    'password': password,
+    'host': host,
     'port': 3306,  # Asegúrate de incluir el puerto si es necesario
-    'database': os.getenv('DATABASE_DB'),
+    'database': database,
     'cursorclass': pymysql.cursors.DictCursor
 }
+
 
 # Cargar el modelo
 model_path = 'models/final_model.pkl'
