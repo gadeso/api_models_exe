@@ -8,13 +8,15 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 import os
 from dotenv import load_dotenv
+import git
+import shutil
 
-# Cargar las variables del archivo .env
+# Load environment variables from .env file
 load_dotenv()
 
 app = FastAPI()
 
-# Configuración de la base de datos usando las variables de entorno
+# Database configuration using environment variables
 DATABASE_URL = {
     'host': os.getenv('DATABASE_HOST'),
     'user': os.getenv('DATABASE_USER'),
@@ -22,23 +24,22 @@ DATABASE_URL = {
     'db': os.getenv('DATABASE_DB')
 }
 
-# Cargar el modelo
+# Load the model
 model_path = 'models/final_model.pkl'
 with open(model_path, 'rb') as f:
     model = joblib.load(f)
 
-# Función para obtener una conexión a la base de datos
+# Function to get a database connection
 def get_db_connection():
     return pymysql.connect(**DATABASE_URL)
 
 @app.get("/predict")
 async def predict(id_candidatura: int):
-    # Conectar a la base de datos
     connection = get_db_connection()
     
     try:
         with connection.cursor() as cursor:
-            # Obtener los datos del candidato
+            # Get candidate data
             cursor.execute("""
                 SELECT c.edad, c.nota_media, c.nivel_ingles, 
                        IFNULL((SELECT nota FROM competencias WHERE id_candidatura = %s AND nombre_competencia = 'Profesionalidad'), 0) AS Profesionalidad,
@@ -58,12 +59,12 @@ async def predict(id_candidatura: int):
             if not candidato_data:
                 raise HTTPException(status_code=404, detail="No se encontraron datos para la candidatura proporcionada.")
 
-            # Crear un DataFrame con las características del candidato y las competencias en el orden correcto
+            # Create a DataFrame with candidate features and competencies
             input_data = pd.DataFrame([candidato_data], columns=[
                 'edad', 'nota_media', 'nivel_ingles', 'Profesionalidad', 'Dominio', 'Resiliencia', 'HabilidadesSociales', 'Liderazgo', 'Colaboracion', 'Compromiso', 'Iniciativa'
             ])
 
-            # Realizar la predicción
+            # Make the prediction
             prediction = model.predict(input_data)
             result = 'Admitido' if prediction == 1 else 'Rechazado'
 
@@ -73,19 +74,18 @@ async def predict(id_candidatura: int):
 
 @app.post("/retrain")
 async def retrain():
-    # Conectar a la base de datos
     connection = get_db_connection()
     
     try:
         with connection.cursor() as cursor:
-            # Obtener todas las competencias
+            # Get all competencies
             cursor.execute("""
                 SELECT id_candidatura, nombre_competencia, nota
                 FROM competencias
             """)
             competencias = cursor.fetchall()
             
-            # Obtener todas las candidaturas con el status requerido
+            # Get all candidatures with the required status
             cursor.execute("""
                 SELECT id_candidatura, status
                 FROM candidaturas
@@ -96,14 +96,14 @@ async def retrain():
             if not competencias or not candidaturas:
                 raise HTTPException(status_code=404, detail="No se encontraron suficientes datos para reentrenar el modelo.")
 
-            # Crear un diccionario para las competencias por candidatura
+            # Create a dictionary for competencies by candidature
             competencias_dict = {}
             for comp in competencias:
                 if comp[0] not in competencias_dict:
                     competencias_dict[comp[0]] = {}
                 competencias_dict[comp[0]][comp[1]] = comp[2]
 
-            # Crear listas para los datos de entrada (X) y las etiquetas (y)
+            # Create lists for input data (X) and labels (y)
             X = []
             y = []
 
@@ -111,9 +111,9 @@ async def retrain():
             for cand in candidaturas:
                 if cand[0] in competencias_dict:
                     comp_dict = competencias_dict[cand[0]]
-                    # Verificar que todas las competencias necesarias están presentes
+                    # Ensure all required competencies are present
                     if all(comp in comp_dict for comp in required_competencies):
-                        # Obtener los datos del candidato
+                        # Get candidate data
                         cursor.execute("""
                             SELECT c.edad, c.nota_media, c.nivel_ingles
                             FROM candidatos c
@@ -141,38 +141,52 @@ async def retrain():
             if not X or not y:
                 raise HTTPException(status_code=400, detail="No se encontraron suficientes datos válidos para reentrenar el modelo.")
 
-            # Convertir a DataFrame
+            # Convert to DataFrame
             X_df = pd.DataFrame(X, columns=['edad', 'nota_media', 'nivel_ingles', 'Profesionalidad', 'Dominio', 'Resiliencia', 'HabilidadesSociales', 'Liderazgo', 'Colaboracion', 'Compromiso', 'Iniciativa'])
             y_series = pd.Series(y)
 
-            # Definir las columnas categóricas y numéricas
+            # Define categorical and numerical columns
             categorical_features = ['nivel_ingles']
             numerical_features = ['edad', 'nota_media', 'Profesionalidad', 'Dominio', 'Resiliencia', 'HabilidadesSociales', 'Liderazgo', 'Colaboracion', 'Compromiso', 'Iniciativa']
 
-            # Preprocesamiento para las características categóricas y numéricas
+            # Preprocessing for categorical and numerical features
             preprocessor = ColumnTransformer(
                 transformers=[
                     ('num', StandardScaler(), numerical_features),
                     ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
                 ])
 
-            # Definir el pipeline
+            # Define the pipeline
             pipeline = Pipeline(steps=[
                 ('preprocessor', preprocessor),
                 ('classifier', RandomForestClassifier(random_state=42))
             ])
 
-            # Entrenar el modelo
+            # Train the model
             new_model = pipeline.fit(X_df, y_series)
 
-            # Guardar el nuevo modelo
+            # Save the new model
             with open(model_path, 'wb') as f:
                 joblib.dump(new_model, f)
 
-            return {"message": "Modelo reentrenado exitosamente."}
+            # Git operations to update the model in the repository
+            repo_url = 'https://github.com/sebasg2/api_modelo_exe.git'
+            repo_path = '/tmp/api_modelo_exe'  # Temporary local path
+            if os.path.exists(repo_path):
+                shutil.rmtree(repo_path)  # Remove existing temp directory to avoid conflicts
+            repo = git.Repo.clone_from(repo_url, repo_path)
+            model_repo_path = os.path.join(repo_path, model_path)
+            shutil.copy2(model_path, model_repo_path)  # Copy the updated model to the cloned repo path
+            repo.index.add([model_repo_path])
+            repo.index.commit('Updated model after retraining')
+            origin = repo.remote(name='origin')
+            origin.push()
+
+            return {"message": "Modelo reentrenado y actualizado en el repositorio exitosamente."}
     finally:
         connection.close()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("api_modelo:app", host="0.0.0.0", port=8000)
+
